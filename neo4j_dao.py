@@ -41,7 +41,7 @@ class Neo4jDAO:  # ToDO
                                             """,
                                   {"id": user_id, "flag": True})
 
-    async def add_user(self, user_id: str, subscriptions: np.array, create_followers: bool = True) -> None:
+    async def add_user(self, user_id: str, subscriptions: np.array, create_followings: bool = True) -> None:
         #
         async with (await self.get_session()) as session:
             await session.run("""
@@ -51,11 +51,12 @@ class Neo4jDAO:  # ToDO
                               {"id": user_id, "flag": False})
 
             for sub_id in subscriptions:
-                if create_followers:
+                if create_followings:
                     await session.run("""
                     MERGE (s:User {id: $sub_id})
                     ON CREATE SET s.needToProcess = $flag
-                    """, {"sub_id": sub_id, "flag": True})
+                    """, {"sub_id": sub_id,
+                          "flag": not (np.all(subscriptions == [-1]) or np.all(subscriptions == [-2]))})
 
                 await session.run("""
                 MATCH (u:User {id: $user_id}), (s:User {id: $sub_id})
