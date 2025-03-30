@@ -1,5 +1,6 @@
 import asyncio
 import os
+from typing import Optional
 
 import numpy as np
 from dotenv import load_dotenv
@@ -26,60 +27,69 @@ class Neo4jDAO:  # ToDO
     async def get_session(self) -> AsyncSession:
         return self.driver.session(database="neo4j")
 
-    async def add_empty_user(self, user_id: str, overwrite: bool = False):
+    async def add_empty_user(self, user_id: str, overwrite: bool = False, generation: int = 0):
         async with (await self.get_session()) as session:
             if overwrite:
                 await session.run("""
                                             MERGE (u:User {id: $id})
-                                            SET u.needToProcess = $flag
+                                            SET u.needToProcess = $flag, u.generation = $generation
                                             """,
-                                  {"id": user_id, "flag": True})
+                                  {"id": user_id, "flag": True, "generation": generation})
             else:
                 await session.run("""
                                             MERGE (u:User {id: $id})
-                                            ON CREATE SET u.needToProcess = $flag
+                                            ON CREATE SET u.needToProcess = $flag, u.generation = $generation
                                             """,
-                                  {"id": user_id, "flag": True})
+                                  {"id": user_id, "flag": True, "generation": generation})
 
-    async def add_user(self, user_id: str, subscriptions: np.array, create_followings: bool = True) -> None:
-        #
+    async def add_user(self, user_id: str, subscriptions: np.array, create_followings: bool = True,
+                       generation: int = 0, child_generation: int | None = None) -> None:
         async with (await self.get_session()) as session:
             await session.run("""
                             MERGE (u:User {id: $id})
-                            SET u.needToProcess = $flag
+                            SET u.needToProcess = $flag, u.generation = $generation
                             """,
-                              {"id": user_id, "flag": False})
+                              {"id": user_id, "flag": False, "generation": generation})
 
             for sub_id in subscriptions:
                 if create_followings:
                     await session.run("""
                     MERGE (s:User {id: $sub_id})
-                    ON CREATE SET s.needToProcess = $flag
+                    ON CREATE SET s.needToProcess = $flag, s.generation = $generation
                     """, {"sub_id": sub_id,
-                          "flag": not (np.all(subscriptions == [-1]) or np.all(subscriptions == [-2]))})
+                          "flag": not (np.all(subscriptions == [-1]) or np.all(subscriptions == [-2])),
+                          "generation": child_generation if child_generation is not None else generation + 1})
 
                 await session.run("""
                 MATCH (u:User {id: $user_id}), (s:User {id: $sub_id})
                 MERGE (u)-[:FOLLOWING]->(s)
                 """, {"user_id": user_id, "sub_id": sub_id})
 
-    async def get_needed_to_process(self) -> pd.DataFrame:
+    async def get_needed_to_process(self, generation: Optional[int] = None) -> pd.DataFrame:
         async with (await self.get_session()) as session:
-            result = await session.run("""
-            MATCH (u:User)
-            WHERE u.needToProcess = True
-            RETURN u.id AS user_id
-            """)
+            if generation is None:
+                result = await session.run("""
+                MATCH (u:User)
+                WHERE u.needToProcess = True
+                RETURN u.id AS user_id
+                """)
+            else:
+                result = await session.run("""
+                                MATCH (u:User)
+                                WHERE u.needToProcess = True, u.generation = $generation
+                                RETURN u.id AS user_id
+                                """, {"generation": generation})
             return pd.DataFrame([record for record in await result.data()])
 
-    async def __create_users(self, users: list[User]) -> None:
+    async def __create_users(self, users: list[User], generation: int) -> None:
         async with (await self.get_session()) as session:
             for user in users:
                 await session.run("""
                 MERGE (u:User {id: $id})
-                SET u.name = $name, u.meta = $meta
+                SET u.name = $name, u.meta = $meta, u.generation = $generation
                 """,
-                                  {"id": user.id, "name": user.name, "meta": user.metaInfo})
+                                  {"id": user.id, "name": user.name,
+                                   "meta": user.metaInfo, "generation": generation})
 
     async def __create_subscriptions(self, users: list[User]) -> None:
         #
@@ -92,9 +102,9 @@ class Neo4jDAO:  # ToDO
                     """,
                                       {"user_id": user.id, "subscribe_on_id": subscribe_on_id})
 
-    async def create_all(self, users: list[User]) -> None:
+    async def create_all(self, users: list[User], generation: int = 0) -> None:
         try:
-            await self.__create_users(users)
+            await self.__create_users(users, generation)
             await self.__create_subscriptions(users)
         except Exception as e:
             print(e)
