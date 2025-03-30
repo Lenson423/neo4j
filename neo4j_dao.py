@@ -30,20 +30,30 @@ class Neo4jDAO:  # ToDO
         with self.get_session() as session:
             session.run("""
                             MERGE (u:User {id: $id})
+                            SET u.needToProcess = $flag
                             """,
-                        {"id": user_id})
+                        {"id": user_id, "flag": False})
 
             for sub_id in followers:
                 if create_followers:
                     session.run("""
                     MERGE (s:User {id: $sub_id})
-                    SET u.needToProcess = $flag
+                    ON CREATE SET s.needToProcess = $flag
                     """, {"sub_id": sub_id, "flag": True})
 
                 session.run("""
                 MATCH (u:User {id: $user_id}), (s:User {id: $sub_id})
                 MERGE (u)-[:FOLLOWS]->(s)
                 """, {"user_id": user_id, "sub_id": sub_id})
+
+    def get_needed_to_process(self) -> pd.DataFrame:
+        with self.get_session() as session:
+            result = session.run("""
+            MATCH (u:User)
+            WHERE u.needToProcess = True
+            RETURN u.id AS user_id
+            """)
+            return result.to_df()
 
     def __create_users(self, users: list[User]) -> None:
         with self.get_session() as session:
@@ -95,3 +105,6 @@ if __name__ == "__main__":
     neo.add_user("5", ["100"], False)
     neo.add_user("6", ["101"], True)
     print("\nOk3\n")
+
+    print(neo.get_needed_to_process())
+    print("Ok4")
