@@ -1,5 +1,6 @@
 import os
 
+import numpy as np
 from dotenv import load_dotenv
 from neo4j import GraphDatabase, Driver, Session
 import pandas as pd
@@ -24,6 +25,25 @@ class Neo4jDAO:  # ToDO
 
     def get_session(self) -> Session:
         return self.driver.session(database="neo4j")
+
+    def add_user(self, user_id: str, followers: np.array, create_followers: bool = True) -> None:
+        with self.get_session() as session:
+            session.run("""
+                            MERGE (u:User {id: $id})
+                            """,
+                        {"id": user_id})
+
+            for sub_id in followers:
+                if create_followers:
+                    session.run("""
+                    MERGE (s:User {id: $sub_id})
+                    SET u.needToProcess = $flag
+                    """, {"sub_id": sub_id, "flag": True})
+
+                session.run("""
+                MATCH (u:User {id: $user_id}), (s:User {id: $sub_id})
+                MERGE (u)-[:FOLLOWS]->(s)
+                """, {"user_id": user_id, "sub_id": sub_id})
 
     def __create_users(self, users: list[User]) -> None:
         with self.get_session() as session:
@@ -69,4 +89,9 @@ if __name__ == "__main__":
 
     followers = neo.get_followers("2")
     print(followers)
-    print("\nOk2")
+    print("\nOk2\n")
+
+    neo.add_user("4", ["1", "3"])
+    neo.add_user("5", ["100"], False)
+    neo.add_user("6", ["101"], True)
+    print("\nOk3\n")
