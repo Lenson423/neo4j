@@ -11,6 +11,6 @@ def load_users(file_path: str = "example.csv") -> list[User]:
             user_id = row["id"]
             name = row["name"]
             meta = row["meta"]
-            subscriptions = np.array(row["followers"].split(",") if row["followers"] else [])
+            subscriptions = np.array(row["subscriptions"].split(",") if row["subscriptions"] else [])
             users.append(User(user_id, name, meta, subscriptions))
         return users

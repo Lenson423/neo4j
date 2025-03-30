@@ -6,4 +6,4 @@ class User:
     id: int
     name: str
     metaInfo: str #description or something else ToDo
-    followers: np.array
+    subscriptions: np.array
