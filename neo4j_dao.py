@@ -1,8 +1,9 @@
+import asyncio
 import os
 
 import numpy as np
 from dotenv import load_dotenv
-from neo4j import GraphDatabase, Driver, Session
+from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncSession
 import pandas as pd
 
 from csv_processor import load_users
@@ -14,21 +15,20 @@ AUTH = (os.getenv("AUTH_NAME"), os.getenv("AUTH_PASSWORD"))
 
 
 class Neo4jDAO:  # ToDO
-    driver: Driver
+    driver: AsyncDriver
 
     def __init__(self):
-        self.driver = GraphDatabase.driver(URI, auth=AUTH)
-        self.driver.verify_connectivity()
+        self.driver = AsyncGraphDatabase.driver(URI, auth=AUTH)
 
-    def __del__(self):
-        self.driver.close()
+    async def close(self):
+        await self.driver.close()
 
-    def get_session(self) -> Session:
+    async def get_session(self) -> AsyncSession:
         return self.driver.session(database="neo4j")
 
-    def add_user(self, user_id: str, followers: np.array, create_followers: bool = True) -> None:
-        with self.get_session() as session:
-            session.run("""
+    async def add_user(self, user_id: str, followers: np.array, create_followers: bool = True) -> None:
+        async with (await self.get_session()) as session:
+            await session.run("""
                             MERGE (u:User {id: $id})
                             SET u.needToProcess = $flag
                             """,
@@ -36,75 +36,80 @@ class Neo4jDAO:  # ToDO
 
             for sub_id in followers:
                 if create_followers:
-                    session.run("""
+                    await session.run("""
                     MERGE (s:User {id: $sub_id})
                     ON CREATE SET s.needToProcess = $flag
                     """, {"sub_id": sub_id, "flag": True})
 
-                session.run("""
+                await session.run("""
                 MATCH (u:User {id: $user_id}), (s:User {id: $sub_id})
                 MERGE (u)-[:FOLLOWS]->(s)
                 """, {"user_id": user_id, "sub_id": sub_id})
 
-    def get_needed_to_process(self) -> pd.DataFrame:
-        with self.get_session() as session:
-            result = session.run("""
+    async def get_needed_to_process(self) -> pd.DataFrame:
+        async with (await self.get_session()) as session:
+            result = await session.run("""
             MATCH (u:User)
             WHERE u.needToProcess = True
             RETURN u.id AS user_id
             """)
-            return result.to_df()
+            return pd.DataFrame([record for record in await result.data()])
 
-    def __create_users(self, users: list[User]) -> None:
-        with self.get_session() as session:
+    async def __create_users(self, users: list[User]) -> None:
+        async with (await self.get_session()) as session:
             for user in users:
-                session.run("""
+                await session.run("""
                 MERGE (u:User {id: $id})
                 SET u.name = $name, u.meta = $meta
                 """,
                             {"id": user.id, "name": user.name, "meta": user.metaInfo})
 
-    def __create_subscriptions(self, users: list[User]) -> None:
-        with self.get_session() as session:
+    async def __create_subscriptions(self, users: list[User]) -> None:
+        async with (await self.get_session()) as session:
             for user in users:
                 for follower_id in user.followers:
-                    session.run("""
+                    await session.run("""
                     MATCH (u:User {id: $user_id}), (f:User {id: $follower_id})
                     MERGE (u)-[:FOLLOWS]->(f)
                     """,
                                 {"user_id": user.id, "follower_id": follower_id})
 
-    def create_all(self, users: list[User]) -> None:
+    async def create_all(self, users: list[User]) -> None:
         try:
-            self.__create_users(users)
-            self.__create_subscriptions(users)
+            await self.__create_users(users)
+            await self.__create_subscriptions(users)
         except Exception as e:
             print(e)
 
-    def get_followers(self, user_id: str) -> pd.DataFrame:  # just example ToDo
-        with self.get_session() as session:
-            result = session.run("""
+    async def get_followers(self, user_id: str) -> pd.DataFrame:  # just example ToDo
+        async with (await self.get_session())as session:
+            result = await session.run("""
             MATCH (u:User {id: $id})-[:FOLLOWS]->(f)
             RETURN f.id AS follower_id, f.name AS follower_name, f.meta AS follower_info
             """,
                                  {"id": user_id})
-            return result.to_df()
+            return pd.DataFrame([record for record in await result.data()])
 
 
-if __name__ == "__main__":
+async def main():
     users = load_users("example.csv")
     neo = Neo4jDAO()
-    neo.create_all(users)
+    await neo.create_all(users)
     print("Ok1\n")
 
-    followers = neo.get_followers("2")
+    followers = await neo.get_followers("2")
     print(followers)
     print("\nOk2\n")
 
-    neo.add_user("4", ["1", "3"])
-    neo.add_user("5", ["100"], False)
-    neo.add_user("6", ["101"], True)
+    await neo.add_user("4", ["1", "3"])
+    await neo.add_user("5", ["100"], False)
+    await neo.add_user("6", ["101"], True)
     print("\nOk3\n")
 
-    print(neo.get_needed_to_process())
+    print(await neo.get_needed_to_process())
     print("Ok4")
+
+    await neo.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())
