@@ -27,7 +27,7 @@ class Neo4jDAO:  # ToDO
     async def get_session(self) -> AsyncSession:
         return self.driver.session(database="neo4j")
 
-    async def add_empty_user(self, user_id: str, overwrite: bool = False, generation: int = 0):
+    async def add_empty_user(self, user_id: int, overwrite: bool = False, generation: int = 0):
         async with (await self.get_session()) as session:
             if overwrite:
                 await session.run("""
@@ -42,7 +42,7 @@ class Neo4jDAO:  # ToDO
                                             """,
                                   {"id": user_id, "flag": True, "generation": generation})
 
-    async def add_user(self, user_id: str, subscriptions: np.array, create_followings: bool = True,
+    async def add_user(self, user_id: int, subscriptions: np.array, create_followings: bool = True,
                        generation: int = 0, child_generation: int | None = None) -> None:
         async with (await self.get_session()) as session:
             await session.run("""
@@ -92,7 +92,6 @@ class Neo4jDAO:  # ToDO
                                    "meta": user.metaInfo, "generation": generation})
 
     async def __create_subscriptions(self, users: list[User]) -> None:
-        #
         async with (await self.get_session()) as session:
             for user in users:
                 for subscribe_on_id in user.subscriptions:
@@ -125,17 +124,22 @@ async def main():
     await neo.create_all(users)
     print("Ok1\n")
 
-    followers = await neo.get_subscriptions("2")
+    followers = await neo.get_subscriptions(2)
     print(followers)
     print("\nOk2\n")
 
-    await neo.add_user("4", ["1", "3"])
-    await neo.add_user("5", ["100"], False)
-    await neo.add_user("6", ["101"], True)
+    await neo.add_user(4, [1, 3])
+    await neo.add_user(5, [100], False)
+    await neo.add_user(6, [101], True)
     print("\nOk3\n")
 
     print(await neo.get_needed_to_process())
     print("Ok4")
+
+    await neo.add_empty_user(2)
+    await neo.add_empty_user(200)
+    await neo.add_empty_user(1, overwrite=False, generation=6)
+    print("Ok5")
 
     await neo.close()
 
