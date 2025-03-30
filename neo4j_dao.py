@@ -28,6 +28,25 @@ class Neo4jDAO:  # ToDO
         return self.driver.session(database="neo4j")
 
     async def add_empty_user(self, user_id: int, overwrite: bool = False, generation: int = 0):
+        """
+                Добавляет пользователя в базу данных.
+
+                Если пользователь с указанным user_id уже существует:
+                    - При overwrite=True помечает пользователч как обработанного и назначает ему новое поколение.
+                    - При overwrite=False оставляет существующую запись без изменений.
+
+                В противном случае создаёт нового пользователя с указанными полями.
+
+                Args:
+                    user_id (int): ID пользователя.
+                    overwrite (bool, optional): Флаг, определяющий, нужно ли перезаписывать существующую запись.
+                                                По умолчанию False.
+                    generation (int, optional): Числовой параметр, указывающий поколение пользователя.
+                                                По умолчанию 0.
+
+                Returns:
+                    None
+                """
         async with (await self.get_session()) as session:
             if overwrite:
                 await session.run("""
@@ -44,6 +63,29 @@ class Neo4jDAO:  # ToDO
 
     async def add_user(self, user_id: int, subscriptions: np.array, create_followings: bool = True,
                        generation: int = 0, child_generation: int | None = None) -> None:
+        """
+                Добавляет пользователя в базу данных и устанавливает связи на основе отношения подписки.
+
+                Метод выполняет следующие действия:
+                1. Создаёт или обновляет пользователя с указанным user_id, и делаает его обработанным +
+                   задааёт его поколение (generation).
+                2. Для каждого идентификатора в subscriptions:
+                   - Если create_followings=True, создаёт узел подписки (если он не существует) и помечает
+                     его необработанным + поколение устанавливается равным (child_generation, если указано, иначе generation + 1).
+                   - Создаёт связь FOLLOWING между user_id и sub_id.
+
+                Args:
+                    user_id (int): ID пользователя.
+                    subscriptions (np.array): Массив ID пользователей, на которых подписан user_id.
+                    create_followings (bool, optional): Определяет, нужно ли создавать узлы подписок.
+                                                        По умолчанию True.
+                    generation (int, optional): Поколение добавляемого пользователя. По умолчанию 0.
+                    child_generation (int | None, optional): Поколение подписчиков. Если None, используется
+                                                             generation + 1. По умолчанию None.
+
+                Returns:
+                    None
+                """
         async with (await self.get_session()) as session:
             await session.run("""
                             MERGE (u:User {id: $id})
@@ -66,6 +108,16 @@ class Neo4jDAO:  # ToDO
                 """, {"user_id": user_id, "sub_id": sub_id})
 
     async def get_needed_to_process(self, generation: Optional[int] = None) -> pd.DataFrame:
+        """
+                Получает пользователей, которые помечены как требующие обработки (needToProcess=True).
+                Args:
+                    generation (Optional[int], optional): Фильтр по поколению пользователей.
+                                                          Если None, возвращаются пользователи всех поколений.
+                                                          По умолчанию None.
+                Returns:
+                    pd.DataFrame: Таблица с одним столбцом `user_id`, содержащая ID пользователей,
+                                  которые требуют обработки.
+                """
         async with (await self.get_session()) as session:
             if generation is None:
                 result = await session.run("""
@@ -76,7 +128,7 @@ class Neo4jDAO:  # ToDO
             else:
                 result = await session.run("""
                                 MATCH (u:User)
-                                WHERE u.needToProcess = True, u.generation = $generation
+                                WHERE u.needToProcess = True AND u.generation = $generation
                                 RETURN u.id AS user_id
                                 """, {"generation": generation})
             return pd.DataFrame([record for record in await result.data()])
@@ -102,6 +154,17 @@ class Neo4jDAO:  # ToDO
                                       {"user_id": user.id, "subscribe_on_id": subscribe_on_id})
 
     async def create_all(self, users: list[User], generation: int = 0) -> None:
+        """
+                Создаёт пользователей и их подписки в базе данных.
+                В случае ошибки выводит сообщение об исключении.
+
+                Args:
+                    users (list[User]): Список объектов пользователей.
+                    generation (int, optional): Поколение создаваемых пользователей. По умолчанию 0.
+
+                Returns:
+                    None
+                """
         try:
             await self.__create_users(users, generation)
             await self.__create_subscriptions(users)
@@ -109,6 +172,18 @@ class Neo4jDAO:  # ToDO
             print(e)
 
     async def get_subscriptions(self, user_id: str) -> pd.DataFrame:  # just example ToDo
+        """
+                Получает список подписок (пользователей, на которых подписан указанный пользователь).
+
+                Args:
+                    user_id (str): ID пользователя, для которого ищутся подписки.
+
+                Returns:
+                    pd.DataFrame: Таблица с тремя столбцами:
+                        - `following_id` (str): ID подписанного пользователя.
+                        - `following_name` (str): Имя подписанного пользователя.
+                        - `following_info` (any): Метаданные о подписанном пользователе.
+                """
         async with (await self.get_session()) as session:
             result = await session.run("""
             MATCH (u:User {id: $id})-[:FOLLOWING]->(f)
