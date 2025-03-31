@@ -259,6 +259,7 @@ class Neo4jDAO:  # ToDO
                         u.professional_type = user.professional_type,
                         u.statuses_count = user.statuses_count,
                         u.listed_count = user.listed_count,
+                        u.verified_type = user.verified_type,
                         u.friends_count = user.friends_count,
                         u.created_at = user.created_at,
                         u.media_count = user.media_count
