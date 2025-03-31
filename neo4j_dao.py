@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import typing
 from pathlib import Path
 from typing import Optional
 
@@ -160,95 +161,109 @@ class Neo4jDAO:  # ToDO
                 MERGE (u)-[:FOLLOWING]->(s)
                 """, {"subscriptions_data": flat_data})
 
+    async def get_needed_to_process(self, generation: Optional[int] = None) -> pd.DataFrame:
+        """
+                Получает пользователей, которые помечены как требующие обработки (needToProcess=True).
+                Args:
+                    generation (Optional[int], optional): Фильтр по поколению пользователей.
+                                                          Если None, возвращаются пользователи всех поколений.
+                                                          По умолчанию None.
+                Returns:
+                    pd.DataFrame: Таблица с одним столбцом `user_id`, содержащая ID пользователей,
+                                  которые требуют обработки.
+                """
+        async with (await self.get_session()) as session:
+            if generation is None:
+                result = await session.run("""
+                        MATCH (u:User)
+                        WHERE u.needToProcess = True
+                        RETURN u.id AS user_id
+                        """)
+            else:
+                result = await session.run("""
+                                        MATCH (u:User)
+                                        WHERE u.needToProcess = True AND u.generation = $generation
+                                        RETURN u.id AS user_id
+                                        """, {"generation": generation})
+            return pd.DataFrame([record for record in await result.data()])
 
-async def get_needed_to_process(self, generation: Optional[int] = None) -> pd.DataFrame:
-    """
-            Получает пользователей, которые помечены как требующие обработки (needToProcess=True).
-            Args:
-                generation (Optional[int], optional): Фильтр по поколению пользователей.
-                                                      Если None, возвращаются пользователи всех поколений.
-                                                      По умолчанию None.
-            Returns:
-                pd.DataFrame: Таблица с одним столбцом `user_id`, содержащая ID пользователей,
-                              которые требуют обработки.
-            """
-    async with (await self.get_session()) as session:
-        if generation is None:
-            result = await session.run("""
-                    MATCH (u:User)
-                    WHERE u.needToProcess = True
-                    RETURN u.id AS user_id
-                    """)
-        else:
-            result = await session.run("""
-                                    MATCH (u:User)
-                                    WHERE u.needToProcess = True AND u.generation = $generation
-                                    RETURN u.id AS user_id
-                                    """, {"generation": generation})
-        return pd.DataFrame([record for record in await result.data()])
-
-
-async def __create_users(self, users: list[User], generation: int) -> None:
-    async with (await self.get_session()) as session:
-        for user in users:
-            await session.run("""
-                    MERGE (u:User {id: $id})
-                    SET u.name = $name, u.meta = $meta, u.generation = $generation
-                    """,
-                              {"id": user.id, "name": user.name,
-                               "meta": user.metaInfo, "generation": generation})
-
-
-async def __create_subscriptions(self, users: list[User]) -> None:
-    async with (await self.get_session()) as session:
-        for user in users:
-            for subscribe_on_id in user.subscriptions:
+    async def __create_users(self, users: list[User], generation: int) -> None:
+        async with (await self.get_session()) as session:
+            for user in users:
                 await session.run("""
-                        MATCH (u:User {id: $user_id}), (f:User {id: $subscribe_on_id})
-                        MERGE (u)-[:FOLLOWING]->(f)
+                        MERGE (u:User {id: $id})
+                        SET u.name = $name, u.meta = $meta, u.generation = $generation
                         """,
-                                  {"user_id": user.id, "subscribe_on_id": subscribe_on_id})
+                                  {"id": user.id, "name": user.name,
+                                   "meta": user.metaInfo, "generation": generation})
 
+    async def __create_subscriptions(self, users: list[User]) -> None:
+        async with (await self.get_session()) as session:
+            for user in users:
+                for subscribe_on_id in user.subscriptions:
+                    await session.run("""
+                            MATCH (u:User {id: $user_id}), (f:User {id: $subscribe_on_id})
+                            MERGE (u)-[:FOLLOWING]->(f)
+                            """,
+                                      {"user_id": user.id, "subscribe_on_id": subscribe_on_id})
 
-async def create_all(self, users: list[User], generation: int = 0) -> None:
-    """
-            Создаёт пользователей и их подписки в базе данных.
-            В случае ошибки выводит сообщение об исключении.
+    async def create_all(self, users: list[User], generation: int = 0) -> None:
+        """
+                Создаёт пользователей и их подписки в базе данных.
+                В случае ошибки выводит сообщение об исключении.
 
-            Args:
-                users (list[User]): Список объектов пользователей.
-                generation (int, optional): Поколение создаваемых пользователей. По умолчанию 0.
+                Args:
+                    users (list[User]): Список объектов пользователей.
+                    generation (int, optional): Поколение создаваемых пользователей. По умолчанию 0.
 
-            Returns:
-                None
-            """
-    try:
-        await self.__create_users(users, generation)
-        await self.__create_subscriptions(users)
-    except Exception as e:
-        print(e)
+                Returns:
+                    None
+                """
+        try:
+            await self.__create_users(users, generation)
+            await self.__create_subscriptions(users)
+        except Exception as e:
+            print(e)
 
+    async def get_subscriptions(self, user_id: int) -> pd.DataFrame:  # just example ToDo
+        """
+                Получает список подписок (пользователей, на которых подписан указанный пользователь).
 
-async def get_subscriptions(self, user_id: int) -> pd.DataFrame:  # just example ToDo
-    """
-            Получает список подписок (пользователей, на которых подписан указанный пользователь).
+                Args:
+                    user_id (int): ID пользователя, для которого ищутся подписки.
 
-            Args:
-                user_id (int): ID пользователя, для которого ищутся подписки.
+                Returns:
+                    pd.DataFrame: Таблица с тремя столбцами:
+                        - `following_id` (str): ID подписанного пользователя.
+                        - `following_name` (str): Имя подписанного пользователя.
+                        - `following_info` (any): Метаданные о подписанном пользователе.
+                """
+        async with (await self.get_session()) as session:
+            result = await session.run("""
+                    MATCH (u:User {id: $id})-[:FOLLOWING]->(f)
+                    RETURN f.id AS following_id, f.name AS following_name, f.meta AS following_info
+                    """,
+                                       {"id": user_id})
+            return pd.DataFrame([record for record in await result.data()])
 
-            Returns:
-                pd.DataFrame: Таблица с тремя столбцами:
-                    - `following_id` (str): ID подписанного пользователя.
-                    - `following_name` (str): Имя подписанного пользователя.
-                    - `following_info` (any): Метаданные о подписанном пользователе.
-            """
-    async with (await self.get_session()) as session:
-        result = await session.run("""
-                MATCH (u:User {id: $id})-[:FOLLOWING]->(f)
-                RETURN f.id AS following_id, f.name AS following_name, f.meta AS following_info
-                """,
-                                   {"id": user_id})
-        return pd.DataFrame([record for record in await result.data()])
+    async def add_info_about_user(self, users_data: typing.List[typing.Dict]):
+        async with (await self.get_session()) as session:
+            await session.run("""
+                    UNWIND $users AS user
+                    MERGE (u:User {id: user.id})
+                    SET u.screen_name = user.screen_name,
+                        u.description = user.description,
+                        u.is_blue_verified = user.is_blue_verified,
+                        u.followers_count = user.followers_count,
+                        u.name = user.name,
+                        u.professional_type = user.professional_type,
+                        u.statuses_count = user.statuses_count,
+                        u.listed_count = user.listed_count,
+                        u.friends_count = user.friends_count,
+                        u.created_at = user.created_at,
+                        u.media_count = user.media_count
+                    RETURN COUNT(u) AS updated_users
+                                       """, {"users": users_data})
 
 
 def process_user_subscriptions(directory_path: str):
