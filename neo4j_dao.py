@@ -263,7 +263,6 @@ class Neo4jDAO:  # ToDO
                         u.friends_count = user.friends_count,
                         u.created_at = user.created_at,
                         u.media_count = user.media_count
-                    RETURN COUNT(u) AS updated_users
                                        """, {"users": users_data})
 
 
