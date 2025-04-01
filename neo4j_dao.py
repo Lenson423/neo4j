@@ -187,6 +187,14 @@ class Neo4jDAO:  # ToDO
                                         """, {"generation": generation})
             return pd.DataFrame([record for record in await result.data()])
 
+    async def get_all_users(self) -> pd.DataFrame:
+        async with (await self.get_session()) as session:
+            result = await session.run("""
+                        MATCH (u:User)
+                        RETURN u.id AS user_id
+                        """)
+            return pd.DataFrame([record for record in await result.data()])
+
     async def __create_users(self, users: list[User], generation: int) -> None:
         async with (await self.get_session()) as session:
             for user in users:
