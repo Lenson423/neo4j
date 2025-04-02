@@ -1,16 +1,18 @@
-#Звездец
 import pandas as pd
-from tqdm import tqdm
+from datasets import tqdm
+from transformers import BertTokenizer, BertForSequenceClassification
 from transformers import pipeline
 
-classifier = pipeline('zero-shot-classification', model='./local_model', tokenizer='./local_model')
+tokenizer = BertTokenizer.from_pretrained("kk08/CryptoBERT")
+model = BertForSequenceClassification.from_pretrained("kk08/CryptoBERT")
+
+classifier = pipeline("sentiment-analysis", model=model, tokenizer=tokenizer)
 
 
 def is_crypto_related(description, screen_name, name):
     user_info = f"{description}; {name}; {screen_name}"
-    candidate_labels = ['crypto', 'non-crypto']
-    result = classifier(user_info, candidate_labels)
-    return result['labels'][0] == 'crypto'
+    result = classifier(user_info)
+    return result[0]['label'] == 'LABEL_1'
 
 
 data = pd.read_csv('data.csv')
