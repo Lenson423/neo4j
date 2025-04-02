@@ -273,6 +273,15 @@ class Neo4jDAO:  # ToDO
                         u.media_count = user.media_count
                                        """, {"users": users_data})
 
+    async def get_all_users_data(self) -> pd.DataFrame:
+        async with (await self.get_session()) as session:
+            result = await session.run("""
+                        MATCH (u:User)
+                        RETURN u.id AS user_id, u.description as description,
+                        u.screen_name as screen_name, u.name as name
+                        """)
+            return pd.DataFrame([record for record in await result.data()])
+
 
 def process_user_subscriptions(directory_path: str):
     path = Path(directory_path)
@@ -299,7 +308,8 @@ def process_user_subscriptions(directory_path: str):
 
 async def main():
     neo = Neo4jDAO()
-    await neo.add_users(*process_user_subscriptions("E:/neo4j/friends_data"))
+    data = await neo.get_all_users_data()
+    data.to_csv('data.csv', index=False)
     await neo.close()
 
 
