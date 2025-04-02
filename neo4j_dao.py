@@ -282,6 +282,15 @@ class Neo4jDAO:  # ToDO
                         """)
             return pd.DataFrame([record for record in await result.data()])
 
+    async def process_labels1(self, users: list, labels: list[str]):
+        users_data = [{'id': id1, 'label': label} for id1, label in zip(users, labels)]
+        async with (await self.get_session()) as session:
+            await session.run("""
+                    UNWIND $users AS user
+                    MERGE (u:User {id: user.id})
+                    SET u.type1 = user.label,
+                                       """, {"users": users_data})
+
 
 def process_user_subscriptions(directory_path: str):
     path = Path(directory_path)
@@ -308,8 +317,10 @@ def process_user_subscriptions(directory_path: str):
 
 async def main():
     neo = Neo4jDAO()
-    data = await neo.get_all_users_data()
-    data.to_csv('data.csv', index=False)
+    # data = await neo.get_all_users_data()
+    # data.to_csv('data.csv', index=False)
+    data = pd.read_csv('result.csv')
+    await neo.process_labels1(data['user_id'], data['is_crypto_related'])
     await neo.close()
 
 
