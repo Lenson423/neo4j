@@ -291,6 +291,34 @@ class Neo4jDAO:  # ToDO
                     SET u.type1 = user.label,
                                        """, {"users": users_data})
 
+    async def create_graph(self):
+        async with (await self.get_session()) as session:
+            await session.run("""CALL gds.graph.project(
+                                'usersGraph',
+                                'User',
+                                { FOLLOWING: { orientation: 'NATURAL' } }
+                                );
+                                """)
+
+    async def wcc(self) -> pd.DataFrame:
+        async with (await self.get_session()) as session:
+            result = await session.run("""
+        CALL gds.wcc.stream('usersGraph')
+        YIELD nodeId, componentId
+        RETURN gds.util.asNode(nodeId).id AS user_id, componentId
+        ORDER BY componentId
+        """)
+            return pd.DataFrame([record for record in await result.data()])
+
+    async def page_rank(self) -> pd.DataFrame:
+        async with (await self.get_session()) as session:
+            result = await session.run("""CALL gds.pageRank.stream('usersGraph')
+                YIELD nodeId, score
+                RETURN gds.util.asNode(nodeId).screen_name AS user_id, score
+                ORDER BY score DESC
+                """)
+            return pd.DataFrame([record for record in await result.data()])
+
 
 def process_user_subscriptions(directory_path: str):
     path = Path(directory_path)
@@ -317,10 +345,9 @@ def process_user_subscriptions(directory_path: str):
 
 async def main():
     neo = Neo4jDAO()
-    # data = await neo.get_all_users_data()
-    # data.to_csv('data.csv', index=False)
-    data = pd.read_csv('result.csv')
-    await neo.process_labels1(data['user_id'], data['is_crypto_related'])
+    await neo.create_graph()
+    data = await neo.page_rank()
+    data.to_csv("result.csv", index=False)
     await neo.close()
 
 
