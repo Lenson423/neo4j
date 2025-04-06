@@ -1,14 +1,26 @@
 import json
 import os
+import threading
+import asyncio
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import AsyncOpenAI
 from tqdm import tqdm
 
 load_dotenv()
 KEY = os.getenv("DEEPSEEK_KEY")
-client = OpenAI(api_key=KEY, base_url="https://api.deepseek.com")
+thread_local = threading.local()
+
+
+async def create_client(max_workers: int = 255):
+    limits = httpx.Limits(
+        max_connections=max_workers,
+        max_keepalive_connections=max_workers
+    )
+
+    return AsyncOpenAI(api_key=KEY, base_url="https://api.deepseek.com", http_client=httpx.AsyncClient(limits=limits))
 
 
 def group_messages_by_token_limit(messages, token_limit=50000):
@@ -33,7 +45,7 @@ def group_messages_by_token_limit(messages, token_limit=50000):
     return groups
 
 
-def extract_keywords(text: str) -> str:
+async def extract_keywords(text: str, client) -> str:
     prompt = (
         "Extract only the words and phrases related to cryptocurrencies "
         "(e.g., cryptocurrency names, exchanges, blockchain terms) and nothing more. "
@@ -43,7 +55,7 @@ def extract_keywords(text: str) -> str:
         f"Text: {text}"
     )
 
-    response = client.chat.completions.create(
+    response = await client.chat.completions.create(
         model="deepseek-chat",
         messages=[
             {"role": "user", "content": prompt}
@@ -53,27 +65,43 @@ def extract_keywords(text: str) -> str:
     return response.choices[0].message.content
 
 
-def process_folder(path: str = "E:/users_data/tweets"):
+async def process_file(file, client):
+    if file.is_file():
+        content = file.read_text(encoding='utf-8')
+        data = json.loads(content).values()
+
+        groups = group_messages_by_token_limit(data)
+
+        words = []
+        try:
+            for group in groups:
+                words.extend(json.loads(await extract_keywords('. '.join(group), client)))
+        except Exception as e:
+            pass
+        return str(file.stem), words
+
+
+async def process_folder(path: str = "E:/users_data/tweets"):
     result = {}
 
     folder = Path(path)
     files = folder.glob("*.json")
-    for i, file in tqdm(enumerate(files)):
-        if file.is_file():
-            content = file.read_text(encoding='utf-8')
-            data = json.loads(content).values()
 
-            groups = group_messages_by_token_limit(data)
+    async with await create_client() as client:
+        tasks = [
+            process_file(file, client) for file in files
+        ]
 
-            words = []
-            try:
-                for group in groups:
-                    words.extend(json.loads(extract_keywords('. '.join(group))))
-            except Exception as e:
-                pass
-            result[str(file.stem)] = words
+        for future in tqdm(asyncio.as_completed(tasks), total=len(tasks)):
+            filename, words = await future
+            result[filename] = words
     return result
 
 
-res = process_folder()
-json.dump(res, open("tmp.json", "w"))
+async def main():
+    res = await process_folder()
+    with open("tmp.json", "w") as f:
+        json.dump(res, f)
+
+
+asyncio.run(main())

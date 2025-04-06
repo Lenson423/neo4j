@@ -1,7 +1,10 @@
-from transformers import pipeline
+import json
+from collections import Counter
 
-model_name = 'facebook/bart-large-mnli'
-classifier = pipeline('zero-shot-classification', model=model_name)
+with open("data.json", "r", encoding="utf-8") as f:
+    data = json.load(f)
 
-classifier.model.save_pretrained('./local_model')
-classifier.tokenizer.save_pretrained('./local_model')
+counter = Counter(entry["communityId"] for entry in data)
+
+for community_id, count in counter.items():
+    print(f"Community ID {community_id}: {count} записей")
