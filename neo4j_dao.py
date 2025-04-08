@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import random
 import typing
 from pathlib import Path
 from typing import Optional
@@ -319,6 +320,109 @@ class Neo4jDAO:  # ToDO
                 """)
             return pd.DataFrame([record for record in await result.data()])
 
+    async def v1(self, users_id: np.array, users_subscriptions: np.array, create_followings: bool = True,
+                 generation: int = 0, child_generation: int | None = None) -> None:
+        n_users = len(users_id)
+        child_generation = generation + 1 if child_generation is None else child_generation
+
+        flat_data = []
+        subscr_data = []
+        for i in range(n_users):
+            user_id = users_id[i]
+            subscriptions = users_subscriptions[i]
+
+            sub_flag = not (np.all(subscriptions == [-1]) or np.all(subscriptions == [-2]))
+
+            flat_data.extend([{
+                'user_id': user_id,
+                'sub_id': sub_id,
+            } for sub_id in subscriptions])
+
+            subscr_data.extend([{'sub_id': sub_id,
+                                 'sub_flag': sub_flag,
+                                 'child_generation': child_generation}
+                                for sub_id in subscriptions])
+
+        async with (await self.get_session()) as session:
+            await session.run("""
+                            UNWIND $users AS user_id
+                            MERGE (u:U {id: user_id})
+                            SET u.needToProcess = $flag, u.generation = $generation
+                            """,
+                              {"users": users_id, "flag": False, "generation": generation})
+
+            if create_followings:
+                await session.run("""
+                    UNWIND $subscriptions_data AS sd
+                    MERGE (s:U {id: sd.sub_id})
+                    ON CREATE SET s.needToProcess = sd.sub_flag,
+                                 s.generation = sd.child_generation
+                    """, {"subscriptions_data": subscr_data})
+
+            await session.run("""
+                UNWIND $subscriptions_data AS sd
+                MATCH (u:U {id: sd.user_id}), (s:U {id: sd.sub_id})
+                MERGE (u)-[:F]->(s)
+                """, {"subscriptions_data": flat_data})
+
+    async def v2(self, users_id: np.array, users_subscriptions: np.array, create_followings: bool = True,
+                 generation: int = 0, child_generation: int | None = None) -> None:
+        n_users = len(users_id)
+
+        child_generation = generation + 1 if child_generation is None else child_generation
+
+        flat_data = []
+        subscr_data = []
+        for i in range(n_users):
+            user_id = users_id[i]
+            subscriptions = users_subscriptions[i]
+
+            sub_flag = not (np.all(subscriptions == [-1]) or np.all(subscriptions == [-2]))
+
+            flat_data.extend([{
+                'user_id': user_id,
+                'sub_id': sub_id,
+            } for sub_id in subscriptions])
+
+            subscr_data.extend([{'sub_id': sub_id,
+                                 'sub_flag': sub_flag,
+                                 'child_generation': child_generation}
+                                for sub_id in subscriptions])
+
+        async with (await self.get_session()) as session:
+            await session.run("""
+                                CALL apoc.periodic.iterate
+                                (
+                                    'UNWIND $users AS user_id RETURN user_id',
+                                    'MERGE (u:U {id: user_id})
+                                    SET u.needToProcess = $flag, u.generation = $generation',
+                                    {batchSize: 100000, params: {users: $users, flag: false, generation: $generation}}
+                                )
+                                """,
+                              {"users": users_id, "flag": False, "generation": generation})
+
+            if create_followings:
+                await session.run("""
+                CALL apoc.periodic.iterate
+                (
+                        'UNWIND $subscriptions_data AS sd RETURN sd',
+                        'MERGE (s:U {id: sd.sub_id})
+                        ON CREATE SET s.needToProcess = sd.sub_flag,
+                                     s.generation = sd.child_generation',
+                        {batchSize: 100000, params: {subscriptions_data: $subscriptions_data}}
+                )
+                        """, {"subscriptions_data": subscr_data})
+
+            await session.run("""
+                CALL apoc.periodic.iterate
+                (
+                    'UNWIND $subscriptions_data AS sd RETURN sd',
+                    'MATCH (u:U {id: sd.user_id}), (s:U {id: sd.sub_id})
+                    MERGE (u)-[:F]->(s)',
+                    {batchSize: 100000, params: {subscriptions_data: $subscriptions_data}}
+                )
+                    """, {"subscriptions_data": flat_data})
+
 
 def process_user_subscriptions(directory_path: str):
     path = Path(directory_path)
@@ -343,11 +447,19 @@ def process_user_subscriptions(directory_path: str):
     return users, datas
 
 
+def create_randoms():
+    n = 10
+    k = [random.randint(100, 100000000000) for _ in range(n)]
+    z = [[random.randint(100, 100000000000) for _ in range(50000)] for _ in range(n)]
+    return k, z
+
+
 async def main():
     neo = Neo4jDAO()
     await neo.create_graph()
-    data = await neo.page_rank()
-    data.to_csv("result.csv", index=False)
+    # data = await neo.page_rank()
+    # data.to_csv("result.csv", index=False)
+    await neo.v2(*create_randoms())
     await neo.close()
 
 
