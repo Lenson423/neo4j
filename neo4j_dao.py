@@ -10,6 +10,7 @@ import numpy as np
 from dotenv import load_dotenv
 from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncSession
 import pandas as pd
+from typing_extensions import List
 
 from csv_processor import load_users
 from userInfo import User
@@ -283,6 +284,25 @@ class Neo4jDAO:  # ToDO
                         """)
             return pd.DataFrame([record for record in await result.data()])
 
+    async def get_user_data(self, name: str) -> dict:
+        async with (await self.get_session()) as session:
+            result = await session.run("""
+                        MATCH (u:User {screen_name: $user_name})
+                        RETURN u.description as description,
+                        u.screen_name as screen_name,
+                        u.name as name
+                        """, {"user_name": name})
+            return (await result.data())[0]
+
+    async def get_all_followers(self, name) -> pd.DataFrame:
+        async with (await self.get_session()) as session:
+            result = await session.run("""
+            MATCH (f:User)-[:FOLLOWING]->(u:User {screen_name: $user_name})
+            RETURN f.screen_name as screen_name,
+            f.name as name, f.description as description
+            """, {"user_name": name})
+            return pd.DataFrame([record for record in await result.data()])
+
     async def process_labels1(self, users: list, labels: list[str]):
         users_data = [{'id': id1, 'label': label} for id1, label in zip(users, labels)]
         async with (await self.get_session()) as session:
@@ -456,10 +476,8 @@ def create_randoms():
 
 async def main():
     neo = Neo4jDAO()
-    await neo.create_graph()
-    # data = await neo.page_rank()
-    # data.to_csv("result.csv", index=False)
-    await neo.v2(*create_randoms())
+    df = await neo.get_all_users_data()
+    df.to_csv('all_users.csv', index=False)
     await neo.close()
 
 

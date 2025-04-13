@@ -47,12 +47,17 @@ def group_messages_by_token_limit(messages, token_limit=50000):
 
 async def extract_keywords(text: str, client) -> str:
     prompt = (
-        "Extract only the words and phrases related to cryptocurrencies "
-        "(e.g., cryptocurrency names, exchanges, blockchain terms) and nothing more. "
-        "Return them as a JSON list, with no additional explanations. "
-        "If nothing is found, return an empty list. "
-        "The result should be in the format: [\"word1\", ..., \"wordn\"] without '''json on the begining. "
-        f"Text: {text}"
+        "Analyze the following text and identify which crypto subcategories the person may belong to." 
+        "Main categories: trader, memecoiner, DeFi enthusiast, NFT collector, builder, investor, miner, analyst."
+        "If you are absolutely sure the person belongs to another crypto-related category, indicate that as well."
+        "Multiple categories may be returned. Return only the list of categories, without explanations."
+        "If there is insufficient information to determine any crypto-related category, "
+        "return the most likely general persona type based on the text. Possible general categories include: "
+        "politician, blogger, journalist, news outlet, sports account, media organization, influencer, company, "
+        "tech enthusiast, artist, musician, parody account, or other clearly identifiable types. "
+        "Do not invent a crypto category if none is clearly present. "
+        "The result should be in the format: [\"word1\", ..., \"wordn\"] without '''json on the begining."
+        f"Text: {text}'"
     )
 
     response = await client.chat.completions.create(
@@ -100,7 +105,7 @@ async def process_folder(path: str = "E:/users_data/tweets"):
 
 async def main():
     res = await process_folder()
-    with open("tmp.json", "w") as f:
+    with open("type_result.json", "w") as f:
         json.dump(res, f)
 
 
