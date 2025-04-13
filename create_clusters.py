@@ -2,12 +2,11 @@ import asyncio
 import json
 import os
 from collections import defaultdict
-from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from tqdm import tqdm
+from tqdm.asyncio import tqdm
 
 from neo4j_dao import Neo4jDAO
 
@@ -115,10 +114,12 @@ async def main():
                                             client) for follower_info in followers_data
             ]
 
-            for future in tqdm(asyncio.as_completed(tasks), total=len(tasks)):
+            for future in tqdm.as_completed(tasks):
                 follower_name, ok = await future
                 if ok:
                     result[user].append(follower_name)
+            with open('res/' + user + '.json', 'w') as file:
+                json.dump(result[user], file)
     await neo.close()
 
 
