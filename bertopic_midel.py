@@ -1,9 +1,26 @@
 import json
 
+import pandas as pd
 from bertopic import BERTopic
 from sklearn.feature_extraction.text import CountVectorizer
 import umap
 import hdbscan
+
+with open("users_comments.json", "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+user_ids = []
+user_texts = []
+
+for user in data:
+    user_id = user["user_id"]
+    comments = user["comments"]
+    full_text = " ".join(comments).strip()
+    if full_text:
+        user_ids.append(user_id)
+        user_texts.append(full_text)
+
+print(f"[INFO] Загружено пользователей: {len(user_ids)}")
 
 vectorizer_model = CountVectorizer(
     stop_words="english",
@@ -38,23 +55,26 @@ topic_model = BERTopic(
     low_memory=True,
 )
 
-
-def get_comments(path: str, basic: str = "/home/ubuntu/tweets/"):
-    with open(basic + path + '.json', "r") as file:
-        data = json.load(file)
-        if data is not None:
-            return data.values()
-        else:
-            return [""]
-
-
-texts_split = []
-for doc in get_comments("bitcatshow"):
-    texts_split.append(str(doc))
-
-topic_model.reduce_topics(texts_split, nr_topics=50)
+topics, probs = topic_model.fit_transform(user_texts)
 topic_model.save("my_model")
-topics, probs = topic_model.fit_transform(texts_split)
-print(topics)
-print()
-print(topic_model.get_topic_info())
+
+
+def get_topic_keywords(topic_id, top_n=5):
+    if topic_id == -1:
+        return ["unknown"]
+    return [word for word, _ in topic_model.get_topic(topic_id)[:top_n]]
+
+
+user_tags = {
+    user_id: get_topic_keywords(topic_id)
+    for user_id, topic_id in zip(user_ids, topics)
+}
+
+df_result = pd.DataFrame({
+    "user_id": user_ids,
+    "topic_id": topics,
+    "tags": [", ".join(tags) for tags in user_tags.values()]
+})
+
+df_result.to_csv("user_tags.csv", index=False, encoding="utf-8-sig")
+print("[INFO] Результаты сохранены в user_tags.csv")
