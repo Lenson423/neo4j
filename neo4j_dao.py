@@ -6,6 +6,8 @@ import typing
 from pathlib import Path
 from typing import Optional
 
+import networkx as nx
+import matplotlib.pyplot as plt
 import numpy as np
 from dotenv import load_dotenv
 from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncSession
@@ -294,6 +296,21 @@ class Neo4jDAO:  # ToDO
                         """, {"user_name": name})
             return (await result.data())[0]
 
+    async def set_users_groups(self, user_names: list[str], groups: list[str]) -> None:
+        if len(user_names) != len(groups):
+            raise ValueError("Длины списков user_names и groups должны совпадать")
+        subscriptions_data = [{
+            "user_name": user_name,
+            "topic_id": topic_id,
+        } for idx, (user_name, topic_id) in enumerate(zip(user_names, groups))]
+
+        async with (await self.get_session()) as session:
+            await session.run("""
+                    UNWIND $subscriptions_data AS sd
+                    MERGE (u:User {screen_name: sd.user_nameZ})
+                    SET u.topic = sd.topic_id
+                """, {"subscriptions_data": subscriptions_data})
+
     async def get_all_followers(self, name) -> pd.DataFrame:
         async with (await self.get_session()) as session:
             result = await session.run("""
@@ -321,6 +338,15 @@ class Neo4jDAO:  # ToDO
                                 );
                                 """)
 
+    async def get_for_image(self):
+        async with (await self.get_session()) as session:
+            result = await session.run("""
+                MATCH (u1:User)-[r:FOLLOWING]->(u2:User)
+                WHERE u1.topic = 1 AND u2.topic = 1
+                RETURN u1, r, u2
+                """)
+            return await result.data()
+
     async def wcc(self) -> pd.DataFrame:
         async with (await self.get_session()) as session:
             result = await session.run("""
@@ -338,6 +364,20 @@ class Neo4jDAO:  # ToDO
                 RETURN gds.util.asNode(nodeId).screen_name AS user_id, score
                 ORDER BY score DESC
                 """)
+            return pd.DataFrame([record for record in await result.data()])
+
+    async def louvain(self) -> pd.DataFrame:
+        async with (await self.get_session()) as session:
+            result = await session.run("""
+                CALL gds.louvain.stream('usersGraph', {
+                    includeIntermediateCommunities: true,
+                    maxLevels: 20,
+                    tolerance: 0.00001
+                })
+                YIELD nodeId, communityId, intermediateCommunityIds
+                RETURN gds.util.asNode(nodeId).id AS user_id, communityId, intermediateCommunityIds
+                ORDER BY communityId
+            """)
             return pd.DataFrame([record for record in await result.data()])
 
     async def v1(self, users_id: np.array, users_subscriptions: np.array, create_followings: bool = True,
@@ -476,9 +516,35 @@ def create_randoms():
 
 async def main():
     neo = Neo4jDAO()
-    df = await neo.get_all_users_data()
-    df.to_csv('all_users.csv', index=False)
+    data = await neo.get_for_image()
+    G = nx.DiGraph()
     await neo.close()
+    for record in data:
+        u1 = record['u1']
+        u2 = record['u2']
+        r = record['r']
+
+        u1_id = u1["screen_name"]  # Или используйте какой-то уникальный атрибут
+        u2_id = u2["screen_name"]
+
+        # Добавляем пользователей как узлы
+        G.add_node(u1_id, label=u1['screen_name'], topic=u1['topic'])
+        G.add_node(u2_id, label=u2['screen_name'], topic=u2['topic'])
+
+        # Добавляем ребра с атрибутами
+        G.add_edge(u1_id, u2_id)
+
+    # Визуализация графа
+    plt.figure(figsize=(150, 150))
+    pos = nx.kamada_kawai_layout(G)  # Для красивого расположения узлов
+    nx.draw(G, pos, with_labels=True, node_size=300, node_color="skyblue", font_size=100, font_weight="bold", edge_color="gray")
+
+    # Сохранение изображения в файл
+    plt.title("User Follow Graph")
+    plt.savefig("user_follow_graph.png", format="PNG")
+
+    # Закрыть график после сохранения
+    plt.close()
 
 
 if __name__ == "__main__":
