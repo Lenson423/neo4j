@@ -342,8 +342,12 @@ class Neo4jDAO:  # ToDO
         async with (await self.get_session()) as session:
             result = await session.run("""
                 MATCH (u1:User)-[r:FOLLOWING]->(u2:User)
-                WHERE u1.topic = 1 AND u2.topic = 1
+                WITH u1, u2, r,
+                     count { (f1:User)-[:FOLLOWING]->(u1) } AS u1_in,
+                     count { (f2:User)-[:FOLLOWING]->(u2) } AS u2_in
+                WHERE u1_in > 1000 AND u2_in > 1000 AND u1.topic = u2.topic AND u1.topic = 30
                 RETURN u1, r, u2
+
                 """)
             return await result.data()
 
@@ -537,7 +541,7 @@ async def main():
     # Визуализация графа
     plt.figure(figsize=(150, 150))
     pos = nx.kamada_kawai_layout(G)  # Для красивого расположения узлов
-    nx.draw(G, pos, with_labels=True, node_size=300, node_color="skyblue", font_size=100, font_weight="bold", edge_color="gray")
+    nx.draw(G, pos, with_labels=True, node_size=300, node_color="skyblue", font_size=6, font_weight="bold", edge_color="gray")
 
     # Сохранение изображения в файл
     plt.title("User Follow Graph")
