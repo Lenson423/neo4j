@@ -1,8 +1,10 @@
 import json
 import os
-import threading
 import asyncio
 from pathlib import Path
+from typing import List, Dict, Tuple, Optional
+from collections import deque
+import contextlib
 
 import httpx
 from dotenv import load_dotenv
@@ -19,14 +21,44 @@ df.set_index('screen_name', inplace=True)
 processed_files = []
 
 
-async def create_client(max_workers: int = 255):
-    limits = httpx.Limits(
-        max_connections=max_workers,
-        max_keepalive_connections=max_workers
-    )
-    timeout = httpx.Timeout(60)
-    return AsyncOpenAI(api_key=KEY, base_url="https://api.deepseek.com", http_client=httpx.AsyncClient(limits=limits),
-                       timeout=timeout, max_retries=5)
+class ClientPool:
+    def __init__(self, pool_size: int = 20):
+        self.pool_size = pool_size
+        self._queue = asyncio.Queue()
+        self._semaphore = asyncio.Semaphore(pool_size)
+
+    async def initialize(self):
+        for _ in range(self.pool_size):
+            client = await self._create_client()
+            await self._queue.put(client)
+
+    async def _create_client(self) -> AsyncOpenAI:
+        timeout = httpx.Timeout(60)
+        return AsyncOpenAI(
+            api_key=KEY,
+            base_url="https://api.deepseek.com",
+            http_client=httpx.AsyncClient(
+                limits=httpx.Limits(max_connections=1),
+                timeout=timeout
+            ),
+            timeout=timeout,
+            max_retries=3
+        )
+
+    async def close(self):
+        while not self._queue.empty():
+            client = await self._queue.get()
+            await client.close()
+
+    @contextlib.asynccontextmanager
+    async def get_client(self):
+        await self._semaphore.acquire()
+        client = await self._queue.get()
+        try:
+            yield client
+        finally:
+            await self._queue.put(client)
+            self._semaphore.release()
 
 
 def read_messages(filename, directory='/home/ubuntu/tweets/'):
@@ -105,40 +137,45 @@ async def extract_keywords(text: str, client) -> str:
     return response.choices[0].message.content
 
 
-async def process_file(file, client):
+async def process_file(file: Path, client_pool: ClientPool) -> Tuple[str, List[str]]:
     if file.is_file():
         screen_name = str(file.stem)
-        name = df.loc[screen_name, 'name']
-        description = df.loc[screen_name, 'description']
-        info = f"Name: {name}, ScreenName: {screen_name}, Description: {description}"
-        messages = [info] + [str(v) for v in read_messages(screen_name)]
-
-        groups = group_messages_by_token_limit(messages)
-
-        words = []
         try:
-            words.extend(json.loads(await extract_keywords('\n '.join(groups[0]), client)))
-            processed_files.append(str(file.stem))
+            name = df.loc[screen_name, 'name']
+            description = df.loc[screen_name, 'description']
+            info = f"Name: {name}, ScreenName: {screen_name}, Description: {description}"
+            messages = [info] + [str(v) for v in read_messages(screen_name + '.json')]
+
+            groups = group_messages_by_token_limit(messages)
+            if not groups:
+                return screen_name, []
+            async with client_pool.get_client() as client:
+                keywords = await extract_keywords('\n '.join(groups[0]), client)
+            processed_files.append(screen_name)
+            return screen_name, json.loads(keywords)
         except Exception as e:
-            print(f"[ERROR] Failed to extract keywords for {file.stem}: {e}")
-        return str(file.stem), words
+            print(f"[ERROR] {screen_name}: {str(e)}")
+            return screen_name, []
 
 
-async def process_folder(path: str = "/home/ubuntu/tweets/"):
-    result = {}
+async def process_folder(path: str = "/home/ubuntu/tweets/") -> Dict[str, List[str]]:
+    client_pool = ClientPool(pool_size=20)
+    await client_pool.initialize()
 
-    folder = Path(path)
-    files = folder.glob("*.json")
+    try:
+        folder = Path(path)
+        files = list(folder.glob("*.json"))
+        results = {}
 
-    async with await create_client() as client:
-        tasks = [
-            process_file(file, client) for file in files
-        ]
-
+        tasks = [process_file(file, client_pool) for file in files]
         for future in tqdm(asyncio.as_completed(tasks), total=len(tasks)):
-            filename, words = await future
-            result[filename] = words
-    return result
+            screen_name, keywords = await future
+            if keywords:
+                results[screen_name] = keywords
+
+        return results
+    finally:
+        await client_pool.close()
 
 
 async def main():
