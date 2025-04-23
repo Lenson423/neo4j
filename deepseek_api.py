@@ -16,6 +16,7 @@ KEY = os.getenv("DEEPSEEK_KEY")
 
 df = pd.read_csv("all_users.csv")
 df.set_index('screen_name', inplace=True)
+processed_files = []
 
 async def create_client(max_workers: int = 255):
     limits = httpx.Limits(
@@ -50,7 +51,6 @@ def group_messages_by_token_limit(messages, token_limit=100000, model_name="deep
 
     if current_group:
         groups.append(current_group)
-    print(len(enc.encode('. '.join(groups[0]), disallowed_special=())))
     return groups
 
 
@@ -93,7 +93,8 @@ async def process_file(file, client):
 
         words = []
         try:
-            words.extend(json.loads(await extract_keywords('. '.join(groups[0]), client)))
+            words.extend(json.loads(await extract_keywords('\n '.join(groups[0]), client)))
+            processed_files.append(str(file.stem))
         except Exception as e:
             print(f"[ERROR] Failed to extract keywords for {file.stem}: {e}")
         return str(file.stem), words
