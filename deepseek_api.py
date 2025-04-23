@@ -8,28 +8,37 @@ import httpx
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from tqdm import tqdm
+import tiktoken
+import pandas as pd
 
 load_dotenv()
 KEY = os.getenv("DEEPSEEK_KEY")
-thread_local = threading.local()
 
+df = pd.read_csv("all_users.csv")
+df.set_index('screen_name', inplace=True)
 
 async def create_client(max_workers: int = 255):
     limits = httpx.Limits(
         max_connections=max_workers,
         max_keepalive_connections=max_workers
     )
+    timeout = httpx.Timeout(60)
+    return AsyncOpenAI(api_key=KEY, base_url="https://api.deepseek.com", http_client=httpx.AsyncClient(limits=limits),
+                       timeout=timeout, max_retries=5)
 
-    return AsyncOpenAI(api_key=KEY, base_url="https://api.deepseek.com", http_client=httpx.AsyncClient(limits=limits))
 
+def group_messages_by_token_limit(messages, token_limit=100000, model_name="deepseek-chat"):
+    try:
+        enc = tiktoken.encoding_for_model(model_name)
+    except KeyError:
+        enc = tiktoken.get_encoding("cl100k_base")
 
-def group_messages_by_token_limit(messages, token_limit=50000):
     groups = []
     current_group = []
     current_tokens = 0
 
     for message in messages:
-        tokens = len(message)
+        tokens = len(enc.encode(message, disallowed_special=()))
 
         if current_tokens + tokens <= token_limit:
             current_group.append(message)
@@ -41,8 +50,9 @@ def group_messages_by_token_limit(messages, token_limit=50000):
 
     if current_group:
         groups.append(current_group)
-
+    print(len(enc.encode('. '.join(groups[0]), disallowed_special=())))
     return groups
+
 
 
 async def extract_keywords(text: str, client) -> str:
@@ -73,16 +83,19 @@ async def extract_keywords(text: str, client) -> str:
 async def process_file(file, client):
     if file.is_file():
         content = file.read_text(encoding='utf-8')
-        data = json.loads(content).values()
+        screen_name = str(file.stem)
+        name = df.loc[screen_name, 'name']
+        description = df.loc[screen_name, 'description']
+        info = f"Name: {name}, ScreenName: {screen_name}, Description: {description}"
+        messages = [info] + [str(v) for v in json.loads(content).values()]
 
-        groups = group_messages_by_token_limit(data)
+        groups = group_messages_by_token_limit(messages)
 
         words = []
         try:
-            for group in groups:
-                words.extend(json.loads(await extract_keywords('. '.join(group), client)))
+            words.extend(json.loads(await extract_keywords('. '.join(groups[0]), client)))
         except Exception as e:
-            pass
+            print(f"[ERROR] Failed to extract keywords for {file.stem}: {e}")
         return str(file.stem), words
 
 
