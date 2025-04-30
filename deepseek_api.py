@@ -1,35 +1,67 @@
 import json
+import aiofiles
 import os
-import threading
 import asyncio
 from pathlib import Path
+from typing import List, Dict, Tuple, Optional
+from collections import deque
+import contextlib
+import time
 
 import httpx
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from tqdm import tqdm
+import tiktoken
+import pandas as pd
 
 load_dotenv()
 KEY = os.getenv("DEEPSEEK_KEY")
-thread_local = threading.local()
+
+df = pd.read_csv("all_users.csv")
+df.set_index('screen_name', inplace=True)
+processed_files = []
+with open('non_empty_users.json', 'r') as f:
+    processed_files = json.load(f)
 
 
-async def create_client(max_workers: int = 255):
-    limits = httpx.Limits(
-        max_connections=max_workers,
-        max_keepalive_connections=max_workers
-    )
+async def read_messages(filename, directory='/home/ubuntu/tweets/'):
+    result = []
+    filepath = os.path.join(directory, filename)
+    async with aiofiles.open(filepath, 'r', encoding='utf-8') as f:
+        try:
+            data = json.loads(await f.read())
+            if not data:
+                return []
 
-    return AsyncOpenAI(api_key=KEY, base_url="https://api.deepseek.com", http_client=httpx.AsyncClient(limits=limits))
+            for user_id, tweet in data.items():
+
+                if 'text' in tweet:
+                    result.append(tweet['text'])
+
+                if 'quote' in tweet and 'text' in tweet['quote']:
+                    result.append(tweet['quote']['text'] + "\n" + tweet['text'])
+
+                if 'retweet' in tweet and 'text' in tweet['retweet']:
+                    result.append(tweet['retweet']['text'])
+
+        except Exception as e:
+            print(f"Ошибка при обработке {filename}: {e}")
+    return result
 
 
-def group_messages_by_token_limit(messages, token_limit=50000):
+def group_messages_by_token_limit(messages, token_limit=60000, model_name="deepseek-chat"):
+    try:
+        enc = tiktoken.encoding_for_model(model_name)
+    except KeyError:
+        enc = tiktoken.get_encoding("cl100k_base")
+
     groups = []
     current_group = []
     current_tokens = 0
 
     for message in messages:
-        tokens = len(message)
+        tokens = len(enc.encode(message, disallowed_special=()))
 
         if current_tokens + tokens <= token_limit:
             current_group.append(message)
@@ -41,13 +73,15 @@ def group_messages_by_token_limit(messages, token_limit=50000):
 
     if current_group:
         groups.append(current_group)
-
     return groups
 
 
-async def extract_keywords(text: str, client) -> str:
+semaphore = asyncio.Semaphore(50)
+
+
+async def extract_keywords(text: str) -> str:
     prompt = (
-        "Analyze the following text and identify which crypto subcategories the person may belong to." 
+        "Analyze the following text and identify which crypto subcategories the person may belong to."
         "Main categories: trader, memecoiner, DeFi enthusiast, NFT collector, builder, investor, miner, analyst."
         "If you are absolutely sure the person belongs to another crypto-related category, indicate that as well."
         "Multiple categories may be returned. Return only the list of categories, without explanations."
@@ -59,53 +93,75 @@ async def extract_keywords(text: str, client) -> str:
         "The result should be in the format: [\"word1\", ..., \"wordn\"] without '''json on the begining."
         f"Text: {text}'"
     )
+    async with semaphore:
+        print("start")
+        start = time.time()
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(
+                "https://api.deepseek.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "deepseek-chat",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0
+                }
+            )
+            print("Status:", r.status_code)
+            print("Text", r.text)
+            print("Headers:", r.headers)
+            print(time.time() - start)
+            return r.json()["choices"][0]["message"]["content"]
 
-    response = await client.chat.completions.create(
-        model="deepseek-chat",
-        messages=[
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0
-    )
-    return response.choices[0].message.content
 
-
-async def process_file(file, client):
+async def process_file(file: Path) -> Tuple[str, List[str]]:
     if file.is_file():
-        content = file.read_text(encoding='utf-8')
-        data = json.loads(content).values()
-
-        groups = group_messages_by_token_limit(data)
-
-        words = []
+        screen_name = str(file.stem)
         try:
-            for group in groups:
-                words.extend(json.loads(await extract_keywords('. '.join(group), client)))
+            name = df.loc[screen_name, 'name']
+            description = df.loc[screen_name, 'description']
+            info = f"Name: {name}, ScreenName: {screen_name}, Description: {description}"
+            messages = [info] + [str(v) for v in (await read_messages(screen_name + '.json'))]
+
+            groups = group_messages_by_token_limit(messages)
+            if not groups:
+                return screen_name, []
+            keywords = await extract_keywords('\n '.join(groups[0]))
+            processed_files.append(screen_name)
+            return screen_name, json.loads(keywords)
         except Exception as e:
-            pass
-        return str(file.stem), words
+            print(f"[ERROR] {screen_name}: {str(e)}")
+            return screen_name, []
 
 
-async def process_folder(path: str = "E:/users_data/tweets"):
-    result = {}
-
+async def process_folder(path: str = "/home/ubuntu/tweets/") -> Dict[str, List[str]]:
     folder = Path(path)
-    files = folder.glob("*.json")
+    order_df = pd.read_csv('result.csv')
+    order = order_df.iloc[:, 0].dropna().astype(str).tolist()
 
-    async with await create_client() as client:
-        tasks = [
-            process_file(file, client) for file in files
-        ]
+    existing_files = {f.stem: f for f in folder.glob("*.json")}
 
-        for future in tqdm(asyncio.as_completed(tasks), total=len(tasks)):
-            filename, words = await future
-            result[filename] = words
-    return result
+    files_ordered = [
+        existing_files[screen_name]
+        for screen_name in order
+        if screen_name in existing_files and screen_name not in processed_files
+    ]
+    results = {}
+
+    tasks = [process_file(file) for file in files_ordered]
+    for future in tqdm(asyncio.as_completed(tasks), total=len(tasks)):
+        screen_name, keywords = await future
+        if keywords:
+            results[screen_name] = keywords
+
+    return results
 
 
 async def main():
     res = await process_folder()
-    with open("type_result.json", "w") as f:
+    with open("type_result3.json", "w") as f:
         json.dump(res, f)
 
 
