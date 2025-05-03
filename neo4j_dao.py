@@ -3,6 +3,7 @@ import json
 import os
 import random
 import typing
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 
@@ -20,6 +21,17 @@ from userInfo import User
 load_dotenv()
 URI = os.getenv("URI")
 AUTH = (os.getenv("AUTH_NAME"), os.getenv("AUTH_PASSWORD"))
+
+
+class Edge(Enum):
+    REPLY = "REPLY"
+    MENTIONS = "MENTIONS"
+    RETWEETS = "RETWEETS"
+    QUOTE_TWEETS = "QUOTE TWEETS"
+    FOLLOWING = "FOLLOWING"
+
+    def __str__(self):
+        return self.value
 
 
 class Neo4jDAO:  # ToDO
@@ -164,6 +176,58 @@ class Neo4jDAO:  # ToDO
                 MATCH (u:User {id: sd.user_id}), (s:User {id: sd.sub_id})
                 MERGE (u)-[:FOLLOWING]->(s)
                 """, {"subscriptions_data": flat_data})
+
+    @staticmethod
+    def get_property_name(edge_type: Edge):
+        property_name = "needToProcess"
+        if edge_type != Edge.FOLLOWING:
+            property_name += str(edge_type)
+        return property_name
+
+    async def add_edges_typed(self, users_ids: List, users_subscriptions: List[List], edge_type: Edge) -> None:
+        """
+        :param users_ids: все пользователи уже должны быть в БД при вызове этого метода
+        :param users_subscriptions: все пользователи уже должны быть в БД при вызове этого метода
+        """
+        if len(users_subscriptions) != len(users_ids):
+            raise Exception('users_subscriptions and users_ids must have same length')
+
+        flat_data = []
+        for i in range(len(users_ids)):
+            user_id = users_ids[i]
+            subscriptions = users_subscriptions[i]
+
+            flat_data.extend([{
+                'user_id': user_id,
+                'sub_id': sub_id,
+                'edge_type': str(edge_type),
+            } for sub_id in subscriptions])
+
+        async with (await self.get_session()) as session:
+            await session.run("""
+                UNWIND $subscriptions_data AS sd
+                MATCH (u:User {id: sd.user_id}), (s:User {id: sd.sub_id})
+                CALL apoc.create.relationship(u, sd.edge_type, {}, s) YIELD rel
+                RETURN u, s, rel
+                """, {"subscriptions_data": flat_data})
+
+            await session.run("""
+                UNWIND $users AS user_id
+                MERGE (u:User {id: user_id})
+                WITH u
+                CALL apoc.create.setProperty(u, $property, $flag) YIELD node
+                RETURN node
+                """,{"users": users_ids, "flag": False, "property": self.get_property_name(edge_type)})
+
+    async def get_not_processed_users(self, edge_type) -> pd.DataFrame:
+        async with (await self.get_session()) as session:
+            result = await session.run("""
+                MATCH (u:User)
+                WITH u, apoc.any.property(u, $property) AS prop
+                WHERE prop IS NULL OR prop = true
+                RETURN u.id AS user_id
+                """, {"property": self.get_property_name(edge_type)})
+            return pd.DataFrame(await result.data())
 
     async def get_needed_to_process(self, generation: Optional[int] = None) -> pd.DataFrame:
         """
@@ -338,19 +402,6 @@ class Neo4jDAO:  # ToDO
                                 );
                                 """)
 
-    async def get_for_image(self):
-        async with (await self.get_session()) as session:
-            result = await session.run("""
-                MATCH (u1:User)-[r:FOLLOWING]->(u2:User)
-                WITH u1, u2, r,
-                     count { (f1:User)-[:FOLLOWING]->(u1) } AS u1_in,
-                     count { (f2:User)-[:FOLLOWING]->(u2) } AS u2_in
-                WHERE u1_in > 1000 AND u2_in > 1000 AND u1.topic = u2.topic AND u1.topic = 30
-                RETURN u1, r, u2
-
-                """)
-            return await result.data()
-
     async def wcc(self) -> pd.DataFrame:
         async with (await self.get_session()) as session:
             result = await session.run("""
@@ -384,171 +435,18 @@ class Neo4jDAO:  # ToDO
             """)
             return pd.DataFrame([record for record in await result.data()])
 
-    async def v1(self, users_id: np.array, users_subscriptions: np.array, create_followings: bool = True,
-                 generation: int = 0, child_generation: int | None = None) -> None:
-        n_users = len(users_id)
-        child_generation = generation + 1 if child_generation is None else child_generation
-
-        flat_data = []
-        subscr_data = []
-        for i in range(n_users):
-            user_id = users_id[i]
-            subscriptions = users_subscriptions[i]
-
-            sub_flag = not (np.all(subscriptions == [-1]) or np.all(subscriptions == [-2]))
-
-            flat_data.extend([{
-                'user_id': user_id,
-                'sub_id': sub_id,
-            } for sub_id in subscriptions])
-
-            subscr_data.extend([{'sub_id': sub_id,
-                                 'sub_flag': sub_flag,
-                                 'child_generation': child_generation}
-                                for sub_id in subscriptions])
-
-        async with (await self.get_session()) as session:
-            await session.run("""
-                            UNWIND $users AS user_id
-                            MERGE (u:U {id: user_id})
-                            SET u.needToProcess = $flag, u.generation = $generation
-                            """,
-                              {"users": users_id, "flag": False, "generation": generation})
-
-            if create_followings:
-                await session.run("""
-                    UNWIND $subscriptions_data AS sd
-                    MERGE (s:U {id: sd.sub_id})
-                    ON CREATE SET s.needToProcess = sd.sub_flag,
-                                 s.generation = sd.child_generation
-                    """, {"subscriptions_data": subscr_data})
-
-            await session.run("""
-                UNWIND $subscriptions_data AS sd
-                MATCH (u:U {id: sd.user_id}), (s:U {id: sd.sub_id})
-                MERGE (u)-[:F]->(s)
-                """, {"subscriptions_data": flat_data})
-
-    async def v2(self, users_id: np.array, users_subscriptions: np.array, create_followings: bool = True,
-                 generation: int = 0, child_generation: int | None = None) -> None:
-        n_users = len(users_id)
-
-        child_generation = generation + 1 if child_generation is None else child_generation
-
-        flat_data = []
-        subscr_data = []
-        for i in range(n_users):
-            user_id = users_id[i]
-            subscriptions = users_subscriptions[i]
-
-            sub_flag = not (np.all(subscriptions == [-1]) or np.all(subscriptions == [-2]))
-
-            flat_data.extend([{
-                'user_id': user_id,
-                'sub_id': sub_id,
-            } for sub_id in subscriptions])
-
-            subscr_data.extend([{'sub_id': sub_id,
-                                 'sub_flag': sub_flag,
-                                 'child_generation': child_generation}
-                                for sub_id in subscriptions])
-
-        async with (await self.get_session()) as session:
-            await session.run("""
-                                CALL apoc.periodic.iterate
-                                (
-                                    'UNWIND $users AS user_id RETURN user_id',
-                                    'MERGE (u:U {id: user_id})
-                                    SET u.needToProcess = $flag, u.generation = $generation',
-                                    {batchSize: 100000, params: {users: $users, flag: false, generation: $generation}}
-                                )
-                                """,
-                              {"users": users_id, "flag": False, "generation": generation})
-
-            if create_followings:
-                await session.run("""
-                CALL apoc.periodic.iterate
-                (
-                        'UNWIND $subscriptions_data AS sd RETURN sd',
-                        'MERGE (s:U {id: sd.sub_id})
-                        ON CREATE SET s.needToProcess = sd.sub_flag,
-                                     s.generation = sd.child_generation',
-                        {batchSize: 100000, params: {subscriptions_data: $subscriptions_data}}
-                )
-                        """, {"subscriptions_data": subscr_data})
-
-            await session.run("""
-                CALL apoc.periodic.iterate
-                (
-                    'UNWIND $subscriptions_data AS sd RETURN sd',
-                    'MATCH (u:U {id: sd.user_id}), (s:U {id: sd.sub_id})
-                    MERGE (u)-[:F]->(s)',
-                    {batchSize: 100000, params: {subscriptions_data: $subscriptions_data}}
-                )
-                    """, {"subscriptions_data": flat_data})
-
-
-def process_user_subscriptions(directory_path: str):
-    path = Path(directory_path)
-    json_files = [f for f in path.glob('*.json') if f.is_file()]
-    users = []
-    datas = []
-
-    for i, file_path in enumerate(json_files):
-        if i == 100:
-            break
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            user_id = file_path.stem
-            users.append(user_id)
-            datas.append(data)
-
-        except json.JSONDecodeError:
-            print(f"Ошибка чтения JSON в файле {file_path}")
-        except Exception as e:
-            print(f"Ошибка при обработке файла {file_path}: {str(e)}")
-    return users, datas
-
-
-def create_randoms():
-    n = 10
-    k = [random.randint(100, 100000000000) for _ in range(n)]
-    z = [[random.randint(100, 100000000000) for _ in range(50000)] for _ in range(n)]
-    return k, z
-
 
 async def main():
     neo = Neo4jDAO()
-    data = await neo.get_for_image()
-    G = nx.DiGraph()
+    print(await neo.get_not_processed_users(Edge.QUOTE_TWEETS))
+    print()
+    await neo.add_empty_user(-3)
+    await neo.add_empty_user(-4)
+    await neo.add_empty_user(-5)
+
+    await neo.add_edges_typed([-3, -5], [[-5], [-3, -4]], Edge.QUOTE_TWEETS)
+    print(await neo.get_not_processed_users(Edge.QUOTE_TWEETS))
     await neo.close()
-    for record in data:
-        u1 = record['u1']
-        u2 = record['u2']
-        r = record['r']
-
-        u1_id = u1["screen_name"]  # Или используйте какой-то уникальный атрибут
-        u2_id = u2["screen_name"]
-
-        # Добавляем пользователей как узлы
-        G.add_node(u1_id, label=u1['screen_name'], topic=u1['topic'])
-        G.add_node(u2_id, label=u2['screen_name'], topic=u2['topic'])
-
-        # Добавляем ребра с атрибутами
-        G.add_edge(u1_id, u2_id)
-
-    # Визуализация графа
-    plt.figure(figsize=(150, 150))
-    pos = nx.kamada_kawai_layout(G)  # Для красивого расположения узлов
-    nx.draw(G, pos, with_labels=True, node_size=300, node_color="skyblue", font_size=6, font_weight="bold", edge_color="gray")
-
-    # Сохранение изображения в файл
-    plt.title("User Follow Graph")
-    plt.savefig("user_follow_graph.png", format="PNG")
-
-    # Закрыть график после сохранения
-    plt.close()
 
 
 if __name__ == "__main__":
