@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Graph Visualization</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .algorithm-params {
+            display: none;
+            margin-top: 10px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Graph Visualization Tool</h1>
+        <form id="visualization-form">
+            <label for="algorithm">Clustering Algorithm:</label>
+            <select id="algorithm" name="algorithm" required>
+                <option value="">-- Select Algorithm --</option>
+                <option value="sbm">Stochastic Block Model (SBM)</option>
+                <option value="louvain">Louvain Community Detection</option>
+                <option value="kclustering">K-Clustering</option>
+                <option value="modularity">Modularity optimization</option>
+            </select><br><br>
+
+            <div id="sbm-params" class="algorithm-params">
+                <label for="sbm_clusters">Number of clusters:</label>
+                <input type="number" id="sbm_clusters" name="sbm_clusters" min="2" max="1000" value="25"><br><br>
+            </div>
+
+            <div id="louvain-params" class="algorithm-params">
+                <label for="louvain_iterations">Maximum iterations:</label>
+                <input type="number" id="louvain_iterations" name="modularity_iterations" min="1" max="1000" value="5"><br><br>
+
+                <label for="louvain_min_size">Minimal cluster size:</label>
+                <input type="number" id="louvain_min_size" name="modularity_clusters" min="2" max="100" value="15"><br><br>
+            </div>
+
+            <div id="kclustering-params" class="algorithm-params">
+                <label for="kclusters">Number of Clusters:</label>
+                <input type="number" id="kclusters" name="kclusters" min="2" max="50" value="5"><br><br>
+
+                <label for="k_init">Number of iterations:</label>
+                <input type="number" id="k_init" name="k_init" min="1" max="100" value="10"><br><br>
+            </div>
+
+            <div id="modularity-params" class="algorithm-params">
+                <label for="modularity_iterations">Maximum iterations:</label>
+                <input type="number" id="modularity_iterations" name="modularity_iterations" min="1" max="1000" value="5"><br><br><label for="modularity_min_size">Minimal cluster size:</label>
+                <input type="number" id="modularity_min_size" name="modularity_clusters" min="2" max="100" value="15"><br><br>
+            </div>
+
+            <label for="edge_type">Edge Type:</label>
+            <select id="edge_type" name="edge_type[]" required multiple>
+                <option value="type1">Type 1</option>
+                <option value="type2">Type 2</option>
+                <option value="type3">Type 3</option>
+                <option value="type4">Type 4</option>
+                <option value="type5">Type 5</option>
+            </select><br><br>
+
+            <label for="metric">Metric:</label>
+            <select id="metric" name="metric" required>
+                <option value="pagerank">Pagerank</option>
+                <option value="eigenvector">Eigenvector Centrality</option>
+                <option value="closeness">Closeness Centrality</option>
+            </select><br><br>
+
+            <button type="submit">Visualize</button>
+        </form>
+
+        <div id="result">
+            <!-- Сюда будет выводиться ссылка на результат -->
+        </div>
+    </div>
+
+    <script>
+        document.getElementById("algorithm").addEventListener("change", function() {
+            document.querySelectorAll(".algorithm-params").forEach(div => {
+                div.style.display = "none";
+            });
+
+            const selectedAlgorithm = this.value;
+            if (selectedAlgorithm) {
+                document.getElementById(`${selectedAlgorithm}-params`).style.display = "block";
+            }
+        });
+
+        document.getElementById("visualization-form").addEventListener("submit", async function(event) {
+            event.preventDefault();
+
+            const algorithm = document.getElementById("algorithm").value;
+            const edge_type = Array.from(document.getElementById("edge_type").selectedOptions)
+                                 .map(option => option.value);
+            const metric = document.getElementById("metric").value;
+
+            let algorithmParams = {};
+            switch(algorithm) {
+                case "sbm":
+                    algorithmParams = {
+                        clusters: document.getElementById("sbm_clusters").value,
+                    };
+                    break;
+                case "louvain":
+                    algorithmParams = {
+                        iterations: document.getElementById("louvain_iterations").value,
+                        min_size: document.getElementById("louvain_min_size").value,
+                    };
+                    break;
+                case "kclustering":
+                    algorithmParams = {
+                        clusters: document.getElementById("kclusters").value,
+                        iterations: document.getElementById("k_init").value
+                    };
+                    break;
+                case "modularity":
+                    algorithmParams = {
+                        iterations: document.getElementById("modularity_iterations").value,
+                        min_size: document.getElementById("modularity_min_size").value,
+                    };
+                    break;
+            }
+
+            let response = await fetch("/zvcolztkcjhdwohlbsgutww/visualize", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    algorithm: algorithm,
+                    algorithm_params: algorithmParams,
+                    edge_type: edge_type,
+                    metric: metric
+                }),
+            });
+
+            let data = await response.json();
+            let task_id = data.task_id;
+            document.getElementById("result").innerHTML = `Your task is processing. You can check the result <a href="/zvcolztkcjhdwohlbsgutww/result/${task_id}" target="_blank">here</a> once it's done.`;
+        });
+    </script>
+</body>
+</html>

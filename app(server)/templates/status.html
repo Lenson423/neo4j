@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Статус задачи</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 2rem;
+            background-color: #f4f4f4;
+        }
+        .card {
+            background: white;
+            padding: 2rem;
+            max-width: 600px;
+            margin: auto;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        .status {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+        .message {
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="status">Status: {{ status }}</div>
+        {% if progress is defined %}
+            <div>Progress: {{ progress }}/{{ total }}</div>
+        {% endif %}
+        {% if message %}
+            <div class="message">{{ message }}</div>
+        {% endif %}
+        {% if error %}
+            <div class="message" style="color: red;">Error: {{ error }}</div>
+        {% endif %}
+    </div>
+</body>
+</html>

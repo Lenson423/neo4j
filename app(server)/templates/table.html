@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <title>Topic Dashboard</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            background: #f9f9f9;
+            padding: 20px;
+        }
+
+        input[type="text"] {
+            padding: 8px;
+            font-size: 16px;
+            width: 300px;
+            margin-bottom: 20px;
+        }
+
+        .topic {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            padding: 20px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+        }
+
+        .tags span {
+            display: inline-block;
+            background: #eef;
+            color: #224;
+            padding: 4px 8px;
+            border-radius: 5px;
+            margin: 3px 3px 3px 0;
+        }
+
+        .size {
+            font-size: 14px;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .user-popup {
+            background: white;
+            position: fixed;
+            top: 20%;
+            left: 50%;
+            transform: translateX(-50%);
+            max-width: 400px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+            z-index: 100;
+        }
+
+        .user-popup h3 {
+            margin-top: 0;
+        }
+
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 99;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .all-users {
+            margin-top: 10px;
+        }
+
+        .toggle-button {
+            cursor: pointer;
+            color: #0077cc;
+            margin-top: 10px;
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+
+<h1>📊 Topic Dashboard</h1>
+<input type="text" id="label-search" placeholder="🔍 Search by tag...">
+<div id="topics-container">Loading...</div>
+
+<div id="user-popup" class="user-popup hidden">
+    <h3 id="popup-name"></h3>
+    <p id="popup-description"></p>
+    <a id="popup-link" href="#" target="_blank">🔗 View Twitter</a>
+</div>
+<div id="overlay" class="overlay hidden" onclick="closePopup()"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script>
+    let users = [];
+
+    function getQueryParam(param) {
+        const params = new URLSearchParams(window.location.search);
+        return params.get(param);
+    }
+
+    async function loadData() {
+        users = await fetch(`/static/graph/my/{{ file_name }}.json`).then(r => r.json());
+        // users = await fetch("modularity_with_score.json").then(r => r.json());
+        renderTopics();
+    }
+
+    function renderTopics(filterTag = "") {
+        const container = document.getElementById("topics-container");
+        container.innerHTML = "";
+
+        const communities = new Map();
+
+        for (const user of users) {
+            const communityId = user.community;
+
+            if (!communities.has(communityId)) {
+                communities.set(communityId, []);
+            }
+
+            communities.get(communityId).push(user);
+        }
+
+        const sortedCommunities = [...communities.entries()]
+            .sort((a, b) => b[1].length - a[1].length); // Сортировка по количеству пользователей в сообществе
+
+        for (const [communityId, members] of sortedCommunities) {
+            if (members.length < 10) continue;
+
+            const tagCount = new Map();
+            for (const user of members) {
+                const tags = [...(user.categories || []), ...(user.keywords || [])];
+                for (const tag of tags) {
+                    tagCount.set(tag, (tagCount.get(tag) || 0) + 1);
+                }
+            }
+
+            const topTags = [...tagCount.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 10)
+                .map(([tag, count]) => tag);
+
+            if (filterTag && !topTags.some(t => t.toLowerCase().includes(filterTag.toLowerCase()))) {
+                continue;
+            }
+
+            const topicEl = document.createElement("div");
+            topicEl.className = "topic";
+
+            const topUsers = members
+                .sort((a, b) => b.score - a.score)
+                .slice(0, 5)
+                .map(u => `<li><a href="#" onclick="showPopup('${u.screen_name}'); return false;">${u.name || u.screen_name}</a> (${u.score.toFixed(2)})</li>`)
+                .join("");
+
+            const allUsers = members
+                .sort((a, b) => b.score - a.score)
+                .map(u => `<li><a href="https://twitter.com/${u.screen_name}" target="_blank">${u.name || u.screen_name}</a> (${u.score.toFixed(2)})</li>`)
+                .join("");
+
+            topicEl.innerHTML = `
+      <h2>🧠 Community ${communityId}</h2>
+      <div class="tags"><strong>Top Tags:</strong> ${topTags.map(t => `<span>${t}</span>`).join("") || "–"}</div>
+      <div class="size"><strong>Users:</strong> ${members.length}</div>
+      <div class="users">
+        <strong>Top Users:</strong>
+        <ul>${topUsers}</ul>
+        <span class="toggle-button" onclick="toggleAllUsers(this)">📂 Show All Users</span>
+        <ul class="all-users hidden">${allUsers}</ul>
+      </div>
+    `;
+
+            container.appendChild(topicEl);
+        }
+    }
+
+
+    function toggleAllUsers(el) {
+        const list = el.nextElementSibling;
+        list.classList.toggle("hidden");
+        el.textContent = list.classList.contains("hidden") ? "📂 Show All Users" : "📁 Hide All Users";
+    }
+
+    function showPopup(screenName) {
+        const user = users.find(u => u.screen_name === screenName);
+        if (!user) return;
+
+        document.getElementById("popup-name").textContent = user.name || user.screen_name;
+        document.getElementById("popup-description").innerHTML = `
+    <p><strong>Description:</strong> ${user.description || "No description."}</p>
+    <p><strong>Categories:</strong> ${(user.categories || []).join(", ") || "None"}</p>
+    <p><strong>Keywords:</strong> ${(user.keywords || []).join(", ") || "None"}</p>
+  `;
+        document.getElementById("popup-link").href = `https://twitter.com/${user.screen_name}`;
+        document.getElementById("user-popup").classList.remove("hidden");
+        document.getElementById("overlay").classList.remove("hidden");
+    }
+
+
+    function closePopup() {
+        document.getElementById("user-popup").classList.add("hidden");
+        document.getElementById("overlay").classList.add("hidden");
+    }
+
+    document.getElementById("label-search").addEventListener("input", (e) => {
+        renderTopics(e.target.value.trim());
+    });
+
+    loadData();
+</script>
+
+
+</body>
+</html>

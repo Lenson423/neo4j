@@ -345,8 +345,8 @@ class Neo4jDAO:  # ToDO
         async with (await self.get_session()) as session:
             result = await session.run("""
                         MATCH (u:User)
-                        RETURN u.id AS user_id, u.description as description,
-                        u.screen_name as screen_name, u.name as name
+                        RETURN u.id AS user_id,
+                        id(u) AS node_id
                         """)
             return pd.DataFrame([record for record in await result.data()])
 
@@ -438,14 +438,8 @@ class Neo4jDAO:  # ToDO
 
 async def main():
     neo = Neo4jDAO()
-    print(await neo.get_not_processed_users(Edge.QUOTE_TWEETS))
-    print()
-    await neo.add_empty_user(-3)
-    await neo.add_empty_user(-4)
-    await neo.add_empty_user(-5)
-
-    await neo.add_edges_typed([-3, -5], [[-5], [-3, -4]], Edge.QUOTE_TWEETS)
-    print(await neo.get_not_processed_users(Edge.QUOTE_TWEETS))
+    data = await neo.get_all_users_data()
+    data.to_csv("app/graph/id_to_node_id.csv", index=False)
     await neo.close()
 
 
